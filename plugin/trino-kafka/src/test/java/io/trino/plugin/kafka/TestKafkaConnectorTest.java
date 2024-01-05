@@ -26,6 +26,7 @@ import io.trino.testing.sql.TestTable;
 import io.trino.tpch.TpchTable;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
+import org.intellij.lang.annotations.Language;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
@@ -740,4 +741,66 @@ public class TestKafkaConnectorTest
                 "SELECT " + fields + " FROM write_test." + tableName + " WHERE f_bigint > 1",
                 "VALUES " + rows);
     }
+
+    @Test
+    public void testInternalFieldConflictInTableMetadata() {
+        assertQueryFails("SELECT table_schema FROM information_schema.columns WHERE table_schema = 'write_test'",
+                "Error listing table columns for catalog kafka: "
+                        + "Internal Kafka column names conflict with column names from the table. "
+                        + "Consider changing kafka.internal-column-prefix configuration property. "
+                        + "topic=" + TABLE_INTERNAL_FIELD_PREFIX
+                        + ", Conflicting names=\\[_key]");
+    }
+
+    @Test
+    @Override
+    public void testSelectInformationSchemaColumns()
+    {
+        String catalog = getSession().getCatalog().get();
+        String schema = getSession().getSchema().get();
+        String schemaPattern = schema.replaceAll(".$", "_");
+
+        @Language("SQL") String ordersTableWithColumns = "VALUES " +
+                "('orders', 'orderkey'), " +
+                "('orders', 'custkey'), " +
+                "('orders', 'orderstatus'), " +
+                "('orders', 'totalprice'), " +
+                "('orders', 'orderdate'), " +
+                "('orders', 'orderpriority'), " +
+                "('orders', 'clerk'), " +
+                "('orders', 'shippriority'), " +
+                "('orders', 'comment')";
+
+        assertQuery("SELECT table_schema FROM information_schema.columns WHERE table_schema = '" + schema + "' GROUP BY table_schema", "VALUES '" + schema + "'");
+        assertQuery("SELECT table_name FROM information_schema.columns WHERE table_name = 'orders' GROUP BY table_name", "VALUES 'orders'");
+        assertQuery("SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = '" + schema + "' AND table_name = 'orders'", ordersTableWithColumns);
+        assertQuery("SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = '" + schema + "' AND table_name LIKE '%rders'", ordersTableWithColumns);
+        assertQuery("SELECT table_name, column_name FROM information_schema.columns WHERE table_schema LIKE '" + schemaPattern + "' AND table_name LIKE '_rder_'", ordersTableWithColumns);
+        assertThat(query(
+                "SELECT table_name, column_name FROM information_schema.columns " +
+                        "WHERE table_catalog = '" + catalog + "' AND table_schema = '" + schema + "' AND table_name LIKE '%orders%'"))
+                .skippingTypesCheck()
+                .containsAll(ordersTableWithColumns);
+
+        // assertQuerySucceeds("SELECT * FROM information_schema.columns");
+        assertQuery("SELECT DISTINCT table_name, column_name FROM information_schema.columns WHERE table_name LIKE '_rders'", ordersTableWithColumns);
+        assertQuerySucceeds("SELECT * FROM information_schema.columns WHERE table_catalog = '" + catalog + "'");
+        assertQuerySucceeds("SELECT * FROM information_schema.columns WHERE table_catalog = '" + catalog + "' AND table_schema = '" + schema + "'");
+        assertQuery("SELECT table_name, column_name FROM information_schema.columns WHERE table_catalog = '" + catalog + "' AND table_schema = '" + schema + "' AND table_name LIKE '_rders'", ordersTableWithColumns);
+        assertQuerySucceeds("SELECT * FROM information_schema.columns WHERE table_catalog = '" + catalog + "' AND table_name LIKE '%'");
+        assertQuery("SELECT column_name FROM information_schema.columns WHERE table_catalog = 'something_else'", "SELECT '' WHERE false");
+
+        assertQuery(
+                "SELECT DISTINCT table_name FROM information_schema.columns WHERE table_schema = 'information_schema' OR rand() = 42 ORDER BY 1",
+                "VALUES " +
+                        "('applicable_roles'), " +
+                        "('columns'), " +
+                        "('enabled_roles'), " +
+                        "('roles'), " +
+                        "('schemata'), " +
+                        "('table_privileges'), " +
+                        "('tables'), " +
+                        "('views')");
+    }
+
 }

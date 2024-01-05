@@ -47,6 +47,7 @@ import java.util.stream.Stream;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.trino.spi.StandardErrorCode.DUPLICATE_COLUMN_NAME;
 import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.connector.RetryMode.NO_RETRIES;
@@ -221,6 +222,19 @@ public class KafkaMetadata
                 }
             }
         });
+
+        Set<String> internalColumns = kafkaInternalFieldManager.getInternalFields().stream()
+                .map(kafkaInternalField -> kafkaInternalField.getColumnHandle(hideInternalColumns))
+                .map(KafkaColumnHandle::getName)
+                .collect(toImmutableSet());
+        Set<String> conflictingColumns = builder.build().stream().map(ColumnMetadata::getName).collect(toSet());
+        conflictingColumns.retainAll(internalColumns);
+        if (!conflictingColumns.isEmpty()) {
+            throw new TrinoException(DUPLICATE_COLUMN_NAME, "Internal Kafka column names conflict with column names from the table. "
+                    + "Consider changing kafka.internal-column-prefix configuration property. "
+                    + "topic=" + schemaTableName
+                    + ", Conflicting names=" + conflictingColumns);
+        }
 
         for (KafkaInternalFieldManager.InternalField fieldDescription : kafkaInternalFieldManager.getInternalFields()) {
             builder.add(fieldDescription.getColumnMetadata(hideInternalColumns));
